@@ -1,0 +1,588 @@
+---
+title: "ThesisAnalysis"
+author: "Elizabeth Farr"
+date: "1/4/2021"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set up
+## Initialize packages
+```{r packages, warning = FALSE, message=FALSE}
+library(ggplot2)
+library(viridis)
+library(grid)
+library(gridExtra)
+
+library(dplyr)
+library(car) #recode function
+library(reshape2) #melt function
+library(tidyverse)
+library(lme4) #for logistic/poisson regression
+library(betareg) #for beta regression
+
+#install.packages("margins")
+library(margins)
+
+```
+
+## Load data
+```{r data, warning = FALSE}
+#Read-in Qualtrics survey responses
+data_raw <- read.csv("C:/Users/farrl/Dropbox/MITei MaaS Adoption/Data/Qualtrics_FinalSample/Car+Ownership+Valuation+Survey+-+Revised_July+3%2C+2020_10.45.csv", stringsAsFactors=FALSE,na.strings=c("","NA"))
+data_gc <- filter(data_raw, gc==1)
+
+#Remove additional "header" rows from Qualtrics data export
+data_gc <- data_gc[3:nrow(data_gc),] 
+data_gc$ResponseId_orig <- data_gc$ResponseId
+data_gc$ResponseId <- as.factor(1:nrow(data_gc))
+```
+
+```{r builtenviro, warning = FALSE}
+#Load in urban/suburban/rural data 
+RuralUrbanSuburban <- read.csv("C:/Users/farrl/Dropbox/MITei MaaS Adoption/Data/Qualtrics_FinalSample/RuralUrbanSuburban_raw.csv", stringsAsFactors = FALSE, na.strings=c("","NA"))
+
+#Creat dummy variables
+RuralUrbanSuburban <- RuralUrbanSuburban %>% mutate(Urban = ifelse(Urban...Suburban...Rural=="U", 1, 0),
+                                                    Suburban = ifelse(Urban...Suburban...Rural=="S", 1, 0),
+                                                    Rural = ifelse(Urban...Suburban...Rural=="R", 1, 0))
+#merge data
+data_gc<- merge(data_gc, RuralUrbanSuburban, by.x=c('HomeZIP'),
+      by.y=c('Zip'),
+      all.x=TRUE)
+
+#how many of our observations are missing this information?
+length(which(is.na(data_gc$"Urban...Suburban...Rural"))) #only missing classification for 2 observations
+
+```
+```{r join walkability, warning = FALSE}
+# Left outer join
+WalkIndex <- read.csv("C:/Users/farrl/Documents/MIT/Fall 2020/Thesis/GIS Data/Zip_WI.csv", stringsAsFactors = FALSE, na.strings=c("","NA"))
+class(WalkIndex)
+
+WalkIndex$Avg_NatWal <- as.numeric(WalkIndex$Avg_NatWal)
+class(WalkIndex$Avg_NatWal)
+mode(WalkIndex$Avg_NatWal)
+
+data_gc <- merge(data_gc, WalkIndex, by.x=c('HomeZIP'), by.y=c('ZCTA5CE10'), all.x = TRUE)
+
+```
+
+# Sample Sociodemographics
+```{r sociodem, warning=FALSE}
+#Recode HHInc categories to quasi-continuous, numeric variable representing HH income 
+
+data_gc$HHInc <- recode(data_gc$HHInc, 
+      "'Less than $10,000'=5; '$10,000 - $14,999'=12.5; '$15,000 - $24,999'=20;
+       '$25,000 - $34,999'=30; '$35,000 - $49,999'=42.5; '$50,000 - $74,999'=62.5; 
+       '$75,000 - $99,999'=87.5; '$100,000 - $149,999'=125; '$150,000 - $199,999'=175; 
+       '$200,000 or more'=225")
+
+
+#How many cars does your household own?: {"Zero", "1 car", "2 cars", "3 or more cars"}
+data_gc$HHCars <- recode(data_gc$HHCars, "'Zero'=0; '1 car'=1; '2 cars'=2; '3 or more cars'=3")
+
+#How many people are there in your household? 
+data_gc$HHPers <- recode(data_gc$HHPers, "'1'=1; '2'=2; '3'=3; '4'=4; '5'=5; '6'=6; '7 or more'=7")
+
+#how many working adults are there in your household?
+data_gc$HHWkAdult <- recode(data_gc$HHWkAdult, "'0'=0; '1'=1; '2'=2; '3'=3; '4'=4")
+
+#recode RHUse_Typical 
+data_gc$RHUse_Typical <- recode(data_gc$RHUse_Typical, "'Zero times' = 0; '1-3 times' = 2; '4-10 times' = 7; 'More than 10 times' = 10")
+
+
+
+data_gc <- data_gc %>% mutate(ModeTravel_Typical_1 = as.numeric(ModeTravel_Typical_1),
+                              ModeTravel_Typical_2 = as.numeric(ModeTravel_Typical_2),
+                              ModeTravel_Typical_3 = as.numeric(ModeTravel_Typical_3),
+                              ModeTravel_Typical_4 = as.numeric(ModeTravel_Typical_4),
+                              ModeTravel_Typical_5 = as.numeric(ModeTravel_Typical_5),
+                              ModeTravel_Typical_6 = as.numeric(ModeTravel_Typical_6),
+                              ModeTravel_Typical_7 = as.numeric(ModeTravel_Typical_7),
+                              ModeTravel_Typical_8 = as.numeric(ModeTravel_Typical_8),
+                              ModeTravel_Typical_Bike = as.numeric(ModeTravel_Typical_9),
+                              ModeTravel_Typical_Walk = as.numeric(ModeTravel_Typical_10),
+                              ModeTravel_Typical_11 = as.numeric(ModeTravel_Typical_11),
+                              ModeTravel_Typical_12 = as.numeric(ModeTravel_Typical_12),
+                              ModeTravel_Typical_car = as.numeric(ModeTravel_Typical_1 + ModeTravel_Typical_2),
+                              ModeTravel_Typical_PT = as.numeric(ModeTravel_Typical_3 + ModeTravel_Typical_4),
+                              ModeTravel_Typical_RH = as.numeric(ModeTravel_Typical_6 + ModeTravel_Typical_7),
+                              TotalTrips = as.numeric(ModeTravel_Typical_1 + ModeTravel_Typical_2 + ModeTravel_Typical_3 + ModeTravel_Typical_4 + ModeTravel_Typical_5 + ModeTravel_Typical_6 + ModeTravel_Typical_7 + ModeTravel_Typical_8 + ModeTravel_Typical_Bike + ModeTravel_Typical_Walk + ModeTravel_Typical_11 + ModeTravel_Typical_12))
+
+
+#recode Travel during COVID
+data_gc <- data_gc %>% mutate(ModeTravel_CV_1 = as.numeric(Q283_1), #personal car as driver
+                              ModeTravel_CV_2 = as.numeric(Q283_2), #personal car as passenger
+                              ModeTravel_CV_3 = as.numeric(Q283_3), #bus
+                              ModeTravel_CV_4 = as.numeric(Q283_4), #train
+                              ModeTravel_CV_6 = as.numeric(Q283_6), #ride-hailing - private ride (e.g. UberX, Lyft, Taxi)
+                              ModeTravel_CV_7 = as.numeric(Q283_7), #ride-hailing - pooled ride (e.g. UberPool, Shared Lyft)
+                              ModeTravel_CV_car = ModeTravel_CV_1 + ModeTravel_CV_2,
+                              ModeTravel_CV_PT = ModeTravel_CV_3 + ModeTravel_CV_4,
+                              ModeTravel_CV_RH = ModeTravel_CV_6 + ModeTravel_CV_7)
+
+#clean Unable variable to create binary indicators - multiple check boxes response
+Unable_options <- c("Driving a car", "Public transit, including bus or train","Bicycle or scooter",
+                    "Ride-hailing")
+Unable_vars <- c("Car", "PT", "Bicycle", "RH")
+# create indicator columns for each action
+for (i in 1:length(Unable_options)) {
+  data_gc[paste("Unable", Unable_vars[i], sep = "")] <- as.integer(str_detect(data_gc$Unable, Unable_options[i]))
+}
+# replace NAs with zero
+data_gc <- data_gc %>% mutate(UnableCar = ifelse(is.na(UnableCar)==TRUE, 0, UnableCar),
+                              UnablePT = ifelse(is.na(UnablePT)==TRUE, 0, UnablePT),
+                              UnableBicycle = ifelse(is.na(UnableBicycle)==TRUE, 0, UnableBicycle),
+                              UnableRH = ifelse(is.na(UnableRH)==TRUE, 0, UnableRH))
+#checked pairwise correlations among the Unable variables; 
+#  low potential for multicollinearity given highest correlation is 0.67
+#650 people unable to use car, 328 unable to use PT, 500 unable to use bike/scooter, and 345 unable to use ridehailing
+
+
+#clean EmpBen (Employee Benefits) variable to create binary indicators - multiple check boxes response
+EmpBen_options <- c("Subsidized or free parking", "Discounted or free transit pass",
+                    "Shower, indoor bike parking, or other bike commuting amenities",
+                    "Carpooling or other program to encourage taking non-single-occupancy vehicles to work")
+EmpBen_vars <- c("Parking", "Transit", "Bike", "Carpool")
+# create indicator columns for each action
+for (i in 1:length(EmpBen_options)) {
+  data_gc[paste("EmpBen", EmpBen_vars[i], sep = "")] <- as.integer(str_detect(data_gc$EmpBen, EmpBen_options[i]))
+}
+# replace NAs with zero
+data_gc <- data_gc %>% mutate(EmpBenParking = ifelse(is.na(EmpBenParking)==TRUE, 0, EmpBenParking),
+                              EmpBenTransit = ifelse(is.na(EmpBenTransit)==TRUE, 0, EmpBenTransit),
+                              EmpBenBike = ifelse(is.na(EmpBenBike)==TRUE, 0, EmpBenBike),
+                              EmpBenCarpool = ifelse(is.na(EmpBenCarpool)==TRUE, 0, EmpBenCarpool))
+#checked pairwise correlations among the EmpBen variables; 
+#  low potential for multicollinearity given highest correlation is 0.25
+#273 individuals with bike benefits, 499 with transit benefits, 1162 with parking benefits, and 293 with carpool benefits
+
+
+#Let's create a bunch more binary indicators!
+data_gc <- data_gc %>% mutate(Chicago = ifelse(DMA == "Chicago", 1, 0),
+                              Seattle = ifelse(DMA == "Seattle", 1, 0),
+                              Dallas = ifelse(DMA == "Dallas", 1, 0),
+                              WashingtonDC = ifelse(DMA == "WashingtonDC", 1, 0),
+                              Age = as.numeric(Age),
+                              Age_bin1 = ifelse(Age %in% 18:29, 1, 0),
+                              Age_bin2 = ifelse(Age %in% 30:39, 1, 0),
+                              Age_bin3 = ifelse(Age %in% 40:49, 1, 0),
+                              Age_bin4 = ifelse(Age %in% 50:59, 1, 0),
+                              Age_bin5 = ifelse(Age >=60, 1, 0),
+                              Age_1 = ifelse(Age %in% 18:34, 1, 0),
+                              Age_2 = ifelse(Age %in% 35:54, 1, 0),
+                              Age_3 = ifelse(Age >=55, 1, 0),
+                              Male = ifelse(Gender == "Male", 1, 0),
+                              NoCar = ifelse(HHCars == 0, 1, 0),
+                              CarOwner = ifelse(HHCars > 0, 1, 0),
+                              OneCar = ifelse(HHCars == 1, 1, 0),
+                              TwoCar = ifelse(HHCars == 2, 1, 0),
+                              ThreeCar = ifelse(HHCars == 3, 1, 0),
+                              MultiCar = ifelse(HHCars>1, 1, 0),
+                              HHCars = as.numeric(HHCars),
+                              UsedRH = ifelse(RH_UseInd == "Yes", 1, 0),
+                              HHInc_bin1 = ifelse(HHInc < 25, 1, 0),
+                              HHInc_bin2 = ifelse(HHInc %in% 25:50, 1, 0),
+                              HHInc_bin3 = ifelse(HHInc %in% 50:75, 1, 0),
+                              HHInc_bin4 = ifelse(HHInc %in% 75:100, 1, 0),
+                              HHInc_bin5 = ifelse(HHInc %in% 100:150, 1, 0),
+                              HHInc_bin6 = ifelse(HHInc %in% 150:200, 1, 0),
+                              HHInc_bin7 = ifelse(HHInc >= 200, 1, 0),
+                              #Hispanic = as.numeric(Hispanic),
+                              White = ifelse(grepl("White or Caucasian", Race), 1, 0),
+                              Black = ifelse(grepl("Black or African American", Race), 1, 0),
+                              Asian = ifelse(grepl("Asian", Race), 1, 0),
+                              Native = ifelse(grepl("American Indian or Alaska Native", Race) | grepl("Native Hawaiian or other Pacific Islander", Race), 1, 0),
+                              OtherRace = ifelse(grepl("Other", Race), 1, 0),
+                              HSorless = ifelse(Educ == "High school diploma or equivalent (GED)" | Educ == "Less than high school diploma", 1, 0),
+                              LessCol = ifelse(Educ == "2+ year college/Associates Degree" | Educ == "Some college, no degree", 1, 0),
+                              ColDeg = ifelse(Educ == "4+ year college/Bachelors Degree", 1, 0),
+                              MstDeg = ifelse(Educ == "Masters Degree", 1, 0),
+                              ProDeg = ifelse(Educ == "Doctoral or Professional degree (PhD, M.D., J.D., etc.)", 1, 0),
+                              AdvDeg = MstDeg + ProDeg,
+                              Unemploy = ifelse(grepl("Unemployed", Employ), 1, 0),
+                              Furlough = ifelse(grepl("Furloughed", Employ), 1, 0),
+                              Student = ifelse(Employ == "Student", 1, 0),
+                              Retired = ifelse(Employ == "Retired", 1, 0),
+                              NotWorking = Unemploy + Furlough + Retired,
+                              FullTime = ifelse(Employ == "Employed, full-time", 1, 0),
+                              PartTime = ifelse(Employ == "Employed, part-time", 1, 0),
+                              OtherEmp = ifelse(grepl("family worker", Employ) | Employ == "Military", 1, 0),
+                              License = ifelse(License == "Yes", 1, 0),
+                              Car_Livelihood = ifelse(Car_Livelihood == "Yes", 1, 0),
+                              #variable is systamatically missing for non-car owners, but recode NAs->0
+                              Car_Livelihood = ifelse(is.na(Car_Livelihood)==TRUE, 0, Car_Livelihood),
+                              HHPers_1 = ifelse(HHPers == 1, 1, 0),
+                              HHPers_2 = ifelse(HHPers == 2, 1, 0),
+                              HHPers_3 = ifelse(HHPers == 3, 1, 0),
+                              HHPers_4 = ifelse(HHPers == 4, 1, 0),
+                              HHPers_5 = ifelse(HHPers == 5, 1, 0),
+                              HHPers_6 = ifelse(HHPers == 6, 1, 0),
+                              HHPers_7 = ifelse(HHPers == 7, 1, 0), 
+                              PTnonuser = ifelse(ModeTravel_Typical_PT == 0, 1, 0),
+                              PTinfrequent = ifelse(ModeTravel_Typical_PT > 0 & ModeTravel_Typical_PT <= 5, 1, 0),
+                              PTfrequent = ifelse(ModeTravel_Typical_PT > 5 & ModeTravel_Typical_PT <= 10, 1, 0),
+                              PTsuperuser = ifelse(ModeTravel_Typical_PT > 10, 1, 0),
+                              PCnonuser = ifelse(ModeTravel_Typical_car == 0, 1, 0),
+                              PCinfrequent = ifelse(ModeTravel_Typical_car > 0 & ModeTravel_Typical_car <= 5, 1, 0),
+                              PCfrequent = ifelse(ModeTravel_Typical_car > 5 & ModeTravel_Typical_car <= 15, 1, 10),
+                              PCsuperuser = ifelse(ModeTravel_Typical_car > 15, 1, 0),
+                              RHUse_Typical_bin1 = ifelse(RHUse_Typical == 0, 1, 0),
+                              RHUse_Typical_bin2 = ifelse(RHUse_Typical %in% 1:3, 1, 0),
+                              RHUse_Typical_bin3 = ifelse(RHUse_Typical %in% 4:10, 1, 0),
+                              RHUse_Typical_bin4 = ifelse(RHUse_Typical >= 10, 1, 0),
+                              Hispanic = ifelse(Hispanic == "Yes", 1, 0),
+                              HHChild = as.numeric(HHChild),
+                              HHChild_0 = ifelse(HHChild == 0, 1, 0),
+                              HHChild_1 = ifelse(HHChild == 1, 1, 0),
+                              HHChild_2 = ifelse(HHChild == 2, 1, 0),
+                              HHChild_3 = ifelse(HHChild == 3, 1, 0),
+                              HHChild_4 = ifelse(HHChild == 4, 1, 0),
+                              HHChild_5 = ifelse(HHChild == 5, 1, 0),
+                              HHWkAdult = as.numeric(HHWkAdult),
+                              HHWkAdult_0 = ifelse(HHWkAdult == 0, 1, 0),
+                              HHWkAdult_1 = ifelse(HHWkAdult == 1, 1, 0),
+                              HHWkAdult_2 = ifelse(HHWkAdult == 2, 1, 0),
+                              HHWkAdult_3 = ifelse(HHWkAdult == 3, 1, 0),
+                              HHWkAdult_4 = ifelse(HHWkAdult == 4, 1, 0),
+                              RHUse_Typical = as.numeric(RHUse_Typical),
+                              HHInc = as.numeric(HHInc), 
+                              SeattleTransit = (Seattle*EmpBenTransit), 
+                              DCTransit = (WashingtonDC*EmpBenTransit),
+                              ChicagoTransit = (Chicago*EmpBenTransit),
+                              SeattleParking = (Seattle*EmpBenParking),
+                              ChicagoParking = (Chicago*EmpBenParking),
+                              DCParking = (WashingtonDC*EmpBenParking),
+                              SeattleBike = (Seattle*EmpBenBike),
+                              ChicagoBike = (Chicago*EmpBenBike),
+                              DCBike = (WashingtonDC*EmpBenBike),
+                              SeattleCarpool = (Seattle*EmpBenCarpool),
+                              DCCarpool = (WashingtonDC*EmpBenCarpool),
+                              ChicagoCarpool = (Chicago*EmpBenCarpool)
+                  )
+
+
+
+sociodem_vars <- c("ResponseId", "DMA", "WashingtonDC", "Chicago", "Seattle", "Dallas", "Age", "Age_bin1", "Age_bin2", "Age_bin3", "Age_bin4", "Age_bin5", "Male", "NoCar", "CarOwner", "OneCar", "TwoCar", "ThreeCar", "MultiCar", "UsedRH", "HHInc", "HHInc_bin1", "HHInc_bin2", "HHInc_bin3", "HHInc_bin4", "HHInc_bin5", "HHInc_bin6", "HHInc_bin7", "White", "Black", "Native", "Asian", "OtherRace", "HSorless", "LessCol", "ColDeg", "MstDeg", "ProDeg", "AdvDeg", "Unemploy", "Furlough", "Student", "Retired", "NotWorking", "FullTime", "PartTime", "OtherEmp", "License", "HHPers", "HHPers_1", "HHPers_2", "HHPers_3", "HHPers_4", "HHPers_5", "HHPers_6", "HHPers_7", "PTnonuser", "PTinfrequent", "PTfrequent", "PTsuperuser", "PCnonuser", "PCinfrequent", "PCfrequent", "PCsuperuser", "Urban...Suburban...Rural", "Rural", "Urban", "Suburban", "ModeTravel_Typical_PT", "ModeTravel_Typical_car", "ModeTravel_Typical_RH", "ModeTravel_CV_car", "ModeTravel_CV_PT", "ModeTravel_CV_RH", "Car_Livelihood", "RHUse_Typical_bin1", "RHUse_Typical_bin2", "RHUse_Typical_bin3", "RHUse_Typical_bin4", "Hispanic", "HHChild_0", "HHChild_1", "HHChild_2", "HHChild_3", "HHChild_4", "HHChild_5", "HHWkAdult_0", "HHWkAdult_1", "HHWkAdult_2", "HHWkAdult_3", "HHWkAdult_4", "UnableBicycle", "UnableCar", "UnablePT", "UnableRH", "EmpBenParking", "EmpBenTransit", "EmpBenBike", "EmpBenCarpool", "HHWkAdult", "HHChild", "RHUse_Typical", "HHCars", "HHInc", "Age_1", "Age_2", "Age_3")
+
+data_sociodem <- subset(data_gc, select=sociodem_vars)
+
+#check average trips for those not working and proportion of trips by car in dallas v dc
+data_NW <- subset(data_gc, NotWorking==1, select=TotalTrips)
+data_notNW <- subset(data_gc, NotWorking==0, select=TotalTrips)
+
+mean(data_NW$TotalTrips, na.rm=T)
+mean(data_notNW$TotalTrips, na.rm=T)
+
+data_NW2 <- subset(data_gc, NotWorking==1, select=ModeTravel_Typical_PT)
+data_notNW2 <- subset(data_gc, NotWorking==0, select=ModeTravel_Typical_PT)
+
+mean(data_NW2$ModeTravel_Typical_PT, na.rm=T)
+mean(data_notNW2$ModeTravel_Typical_PT, na.rm=T)
+
+data_Dallas <- subset(data_gc, Dallas==1, select=CarTripShare)
+mean(data_Dallas$CarTripShare, na.rm=T)
+
+data_DC <- subset(data_gc, WashingtonDC==1, select=CarTripShare)
+mean(data_DC$CarTripShare, na.rm=T)
+
+```
+
+```{r regression, warning=FALSE}
+#Test logit with intercept and employee benefit parking only#
+testlogit <- glm(PCfrequent ~ EmpBenParking, data = data_gc)
+summary(testlogit)
+
+
+#Add in more controls
+Logit1 <- glm(PCsuperuser ~ EmpBenParking + Rural + Urban + WashingtonDC + Chicago + Seattle + 
+                        HHInc + HHPers + Male + Age + Black + Native + Asian + OtherRace + LessCol + ColDeg + AdvDeg + HHCars + Hispanic + HHChild + HHWkAdult + UnableBicycle + UnablePT + UnableRH + EmpBenTransit + EmpBenBike + EmpBenCarpool, data = data_gc)
+summary(Logit1)
+
+#Trying out a linear regression model with all variables, then reducing
+
+linear1 <- lm(ModeTravel_Typical_car ~ EmpBenParking + Rural + Urban + WashingtonDC + Chicago + Seattle + 
+                        HHInc + HHPers + Male + Age + Black + Native + Asian + OtherRace + LessCol + ColDeg + AdvDeg + HHCars + Hispanic + HHChild + HHWkAdult + UnableBicycle + UnablePT + UnableRH + UnableCar + EmpBenTransit + EmpBenBike + EmpBenCarpool + UsedRH + Furlough + Student + Retired + FullTime + NotWorking + PartTime + Car_Livelihood, data = data_gc)
+summary(linear1)
+
+linear2 <- lm(ModeTravel_Typical_car ~ EmpBenParking + Urban + WashingtonDC + Chicago + Seattle + 
+                        Male + LessCol + ColDeg + AdvDeg + HHCars + HHChild + HHWkAdult + EmpBenTransit + EmpBenBike + NotWorking + UnableCar + UsedRH + License, data = data_gc)
+summary(linear2)
+#none of these seem to work well
+
+```
+```{r negative and poisson regression, warning=FALSE}
+#Try out poisson and negative binary#
+
+library(MASS)
+library(rsq)
+
+#create employee benefit interaction terms
+data_gc$EmpBenParkTrans <- (data_gc$EmpBenParking*data_gc$EmpBenTransit)
+data_gc$EmpBenCarpool <- (data_gc$EmpBenParking*data_gc$EmpBenCarpool)
+data_gc$EmpBenBike <- (data_gc$EmpBenParking*data_gc$EmpBenBike)
+data_gc$EmpBenAll <- (data_gc$EmpBenParking*data_gc$EmpBenCarpool*data_gc$EmpBenBike*data_gc$EmpBenTransit)
+sum(data_gc$EmpBenParkBike)
+#these ended up not being significant or had too little data to be used in models
+
+#try out poisson fit
+poissonfit <- glm(ModeTravel_Typical_car ~ EmpBenParking + Urban + WashingtonDC + Chicago + Seattle + Male + log(Age) + White + Asian + Native + LessCol + ColDeg + AdvDeg + HHCars + HHChild + HHWkAdult + EmpBenCarpool + EmpBenTransit + EmpBenBike + NotWorking + Student + UnableCar + UsedRH, family = poisson, data = data_gc)
+summary(poissonfit)
+rsq(poissonfit, type="lr")
+logLik(poissonfit)
+#AIC = 72018
+
+#try out negative binary
+
+nbfit <- glm.nb(ModeTravel_Typical_car ~ EmpBenParking + Urban + WashingtonDC + Chicago + Seattle + Male + log(Age) + White + Asian + Native + LessCol + ColDeg + AdvDeg + HHCars + HHChild + HHWkAdult + EmpBenCarpool + EmpBenTransit + EmpBenBike + NotWorking + Student + UnableCar + UsedRH + WashingtonDC*EmpBenParking, data = data_gc)
+summary(nbfit)
+rsq(nbfit, type="lr")
+#0.1937
+#negative binary looks to be better fit
+
+
+#final negative binary with interaction city benefits
+nbfit <- glm.nb(ModeTravel_Typical_car ~ ModeTravel_Typical_PT + ModeTravel_Typical_RH + ModeTravel_Typical_Bike + ModeTravel_Typical_Walk + Urban + WashingtonDC + Chicago + Seattle + Male + log(Age) + White + Asian + Native + OtherRace + LessCol + ColDeg + AdvDeg + HHCars + HHChild + HHWkAdult + EmpBenCarpool + EmpBenParking + EmpBenTransit + EmpBenBike + NotWorking + Student + UnableCar + UsedRH + SeattleTransit + DCTransit + ChicagoTransit + SeattleParking + ChicagoParking + DCParking + SeattleBike + ChicagoBike + DCBike + SeattleCarpool + DCCarpool + ChicagoCarpool + Avg_NatWal, data = data_gc)
+summary(nbfit)
+rsq(nbfit, type="lr")
+
+
+### MARGINS PACKAGE
+#Experimenting on how best to calculate marginal impacts
+#https://thomasleeper.com/margins/reference/margins.html 
+#https://cran.r-project.org/web/packages/margins/vignettes/Introduction.html 
+
+nbmarg <- margins(nbfit, data = find_data(nbfit, parent.frame()),
+  variables = NULL, at = NULL, 
+  type = "response", #alternative is "link"
+  vcov = stats::vcov(nbfit), 
+  vce = "delta", #type of estimation procedure to use for estimating variances
+  iterations = 50L, 
+  unit_ses = FALSE, #if vce = "delta", a logical specifying whether to calculate and return unit-specific marginal effect variances
+  eps = 1e-07)
+#type = A character string indicating the type of marginal effects to estimate. Mostly relevant for non-linear models, where the reasonable options are “response” (the default) or “link” (i.e., on the scale of the linear predictor in a GLM).
+
+summary(nbmarg)
+plot(nbmarg)
+
+#try making better plot of AME
+nbrmargdata <- data.frame(summary(nbmarg))
+Variables <- c("Advanced Degree", "Age", "Asian", "Walkability", "Chicago", "Chicago Bike", "Chicago Carpool", "Chicago Parking", "Chicago Transit",  "College Degree", "DC Bike", "DC Carpool", "DC Parking", "DC Transit", "Employer Bike", "Employer Carpool", "Employer Parking", "Employer Transit", "Household Cars", "Household Children", "Household Working Adults", "Some College", "Male", "Bike Trips", "Transit Trips", "Ridehailing Trips",  "Walk Trips", "Native American", "Not Working", "Other Race", "Seattle", "Seattle Bike", "Seattle Carpool", "Seattle Parking", "Seattle Transit", "Student", "Unable to Drive", "Urban", "Used Ridehailing", "Washington DC", "White")
+
+cbind(nbrmargdata, Variables)
+
+nbmargplot <- ggplot() + geom_point(data = nbrmargdata, aes(reorder(Variables, -AME), AME), colour = 'red', size = 3) +  
+  geom_errorbar(
+    data = nbrmargdata,
+    aes(Variables, AME, ymin = lower, ymax = upper),
+    colour = 'red',
+    width = 0.4
+  ) + theme(axis.text.x=element_text(angle=90, vjust = 0.5, hjust=1))
+
+nbmargplot <- nbmargplot + labs(title = "Average Marginal Effects of Negative Binomial Variables",
+              x = "Variables", y = "Average Marginal Effect") + theme(axis.title = element_text(size = 15)) + theme(plot.title = element_text(size = 19)) 
+
+nbmargplot
+
+dev.off()
+
+```
+
+```{r beta regression, warning=FALSE}
+#Try out beta#
+
+#make the rest of the trip diary entries numeric
+data_gc <- data_gc %>% mutate(ModeTravel_Typical_5 = as.numeric(ModeTravel_Typical_5),
+                              ModeTravel_Typical_8 = as.numeric(ModeTravel_Typical_8),
+                              ModeTravel_Typical_9 = as.numeric(ModeTravel_Typical_9),
+                              ModeTravel_Typical_10 = as.numeric(ModeTravel_Typical_10),
+                              ModeTravel_Typical_11 = as.numeric(ModeTravel_Typical_11),
+                              ModeTravel_Typical_12 = as.numeric(ModeTravel_Typical_12)
+                              )
+#add variables for tripshares, which divides car, transit, bike, walk, RH travel by total travel in the travel diary
+data_gc <- data_gc %>% mutate(CarTripShare = ModeTravel_Typical_car/(ModeTravel_Typical_1 + ModeTravel_Typical_2 + ModeTravel_Typical_3 + ModeTravel_Typical_4 + ModeTravel_Typical_5 + ModeTravel_Typical_6 + ModeTravel_Typical_7 + ModeTravel_Typical_8 + ModeTravel_Typical_9 + ModeTravel_Typical_10 + ModeTravel_Typical_11 + ModeTravel_Typical_12))
+
+data_gc <- data_gc %>% mutate(PTTripShare = ModeTravel_Typical_PT/(ModeTravel_Typical_1 + ModeTravel_Typical_2 + ModeTravel_Typical_3 + ModeTravel_Typical_4 + ModeTravel_Typical_5 + ModeTravel_Typical_6 + ModeTravel_Typical_7 + ModeTravel_Typical_8 + ModeTravel_Typical_9 + ModeTravel_Typical_10 + ModeTravel_Typical_11 + ModeTravel_Typical_12))
+
+data_gc <- data_gc %>% mutate(RHTripShare = ModeTravel_Typical_RH/(ModeTravel_Typical_1 + ModeTravel_Typical_2 + ModeTravel_Typical_3 + ModeTravel_Typical_4 + ModeTravel_Typical_5 + ModeTravel_Typical_6 + ModeTravel_Typical_7 + ModeTravel_Typical_8 + ModeTravel_Typical_9 + ModeTravel_Typical_10 + ModeTravel_Typical_11 + ModeTravel_Typical_12))
+
+data_gc <- data_gc %>% mutate(BikeTripShare = ModeTravel_Typical_9/(ModeTravel_Typical_1 + ModeTravel_Typical_2 + ModeTravel_Typical_3 + ModeTravel_Typical_4 + ModeTravel_Typical_5 + ModeTravel_Typical_6 + ModeTravel_Typical_7 + ModeTravel_Typical_8 + ModeTravel_Typical_9 + ModeTravel_Typical_10 + ModeTravel_Typical_11 + ModeTravel_Typical_12))
+
+data_gc <- data_gc %>% mutate(WalkTripShare = ModeTravel_Typical_10/(ModeTravel_Typical_1 + ModeTravel_Typical_2 + ModeTravel_Typical_3 + ModeTravel_Typical_4 + ModeTravel_Typical_5 + ModeTravel_Typical_6 + ModeTravel_Typical_7 + ModeTravel_Typical_8 + ModeTravel_Typical_9 + ModeTravel_Typical_10 + ModeTravel_Typical_11 + ModeTravel_Typical_12))
+
+head(data_gc$CarTripShare, 30)
+mean(data_gc$CarTripShare, na.rm=T)
+
+#since we have 0 and 1 included, we adjust with (y * (n - 1) + 0.5)/n, where n is the sample size (i.e., 4022)
+
+data_gc <- data_gc %>% mutate(CarTripShare=(CarTripShare*4021 + 0.5)/4022)
+
+
+#beta regression attempt 1
+                              
+betafit1 <- betareg::betareg(CarTripShare ~ EmpBenParking + Urban + WashingtonDC + Chicago + Seattle + Male + log(Age) + LessCol + ColDeg + AdvDeg + HHCars + HHChild + HHWkAdult + EmpBenCarpool + EmpBenTransit + EmpBenBike + NotWorking + UnableCar + UsedRH, data = data_gc)
+sum_beta1 <- summary(betafit1)
+sum_beta1               
+
+#improved to get the best fit for beta, using logit still
+
+betafit2 <- betareg::betareg(CarTripShare ~ EmpBenParking + Urban + WashingtonDC + Chicago + Seattle + Male + log(Age) + White + Asian + Native + LessCol + ColDeg + AdvDeg + HHCars + HHWkAdult + HHChild + EmpBenCarpool + EmpBenTransit + EmpBenBike + NotWorking + PartTime + Student + UnableCar + UsedRH +Avg_NatWal, data = data_gc)
+sum_beta2 <- summary(betafit2)
+sum_beta2 
+
+
+#As in binomial GLMs, selection of an appropriate link function can greatly improve the model fit (McCullagh and Nelder 1989), especially if extreme proportions (close to 0 or 1) have been observed in the data
+#Can we significantly improve model fit using a different link function? 
+#mine says Error in chol.default(K) : the leading minor of order 26 is not positive definite
+#removed "cloglog" and then it worked
+
+sapply(c("logit", "probit", "cauchit", "loglog"), function(x) logLik(update(betafit2, link = x)))
+sapply(c("logit", "probit", "cauchit", "loglog"), function(x) AIC(update(betafit2, link = x)))
+sapply(c("logit", "probit", "cauchit", "loglog"), function(x) summary(update(betafit2, link = x))) 
+#this seems to show that probit is the best model, with a psuedo r squared of 0.236, improvement from
+#logit r squared which was 0.223
+
+#FINAL probit model 
+betafit_probit <- betareg::betareg(CarTripShare ~ EmpBenParking + Urban + WashingtonDC + Chicago + Seattle + Male + log(Age) + White + Asian + Native + OtherRace + LessCol + ColDeg + AdvDeg + HHCars + HHChild + HHWkAdult + EmpBenCarpool + EmpBenTransit + EmpBenBike + NotWorking + Student + UnableCar + UsedRH + SeattleTransit + DCTransit + ChicagoTransit + SeattleParking + ChicagoParking + DCParking + SeattleBike + ChicagoBike + DCBike + SeattleCarpool + DCCarpool + ChicagoCarpool + Avg_NatWal, data = data_gc, link = "probit")
+sum_betaprobit <- summary(betafit_probit)
+sum_betaprobit 
+
+
+### MARGINS PACKAGE
+#Experimenting on how best to calculate marginal impacts
+#https://thomasleeper.com/margins/reference/margins.html 
+#https://cran.r-project.org/web/packages/margins/vignettes/Introduction.html 
+
+betamarg <- margins(betafit_probit, data = find_data(betafit_probit, parent.frame()),
+  variables = NULL, at = NULL, 
+  type = "response",
+  vcov = stats::vcov(betafit_probit, phi = FALSE), 
+  vce = "delta", 
+  iterations = 50L, unit_ses = FALSE, eps = 1e-07)
+
+summary(betamarg)
+plot(betamarg)
+
+#make a GGplot of AME for beta probit model
+betamargdata <- data.frame(summary(betamarg))
+Variables <- c("Advanced Degree", "Age", "Asian", "Walkability", "Chicago", "Chicago Bike", "Chicago Carpool", "Chicago Parking", "Chicago Transit",  "College Degree", "DC Bike", "DC Carpool", "DC Parking", "DC Transit", "Employer Bike", "Employer Carpool", "Employer Parking", "Employer Transit", "Household Cars", "Household Children", "Household Working Adults", "Some College", "Male", "Native American", "Not Working", "Other Race", "Seattle", "Seattle Bike", "Seattle Carpool", "Seattle Parking", "Seattle Transit", "Student", "Unable to Drive", "Urban", "Used Ridehailing", "Washington DC", "White")
+
+cbind(betamargdata, Variables)
+
+betamargplot <- ggplot() + geom_point(data = betamargdata, aes(reorder(Variables, -AME), AME), colour = 'red', size = 3) +  
+  geom_errorbar(
+    data = betamargdata,
+    aes(Variables, AME, ymin = lower, ymax = upper),
+    colour = 'red',
+    width = 0.4
+  ) + theme(axis.text.x=element_text(angle=90, vjust = 0.5, hjust=1))
+
+betamargplot <- betamargplot + labs(title = "Average Marginal Effects of Beta Probit Variables",
+              x = "Variables", y = "Average Marginal Effect") + theme(axis.title = element_text(size = 17)) + theme(plot.title = element_text(size = 20)) 
+
+betamargplot
+
+#DELETE LATER
+SBDCexp <- read.csv("C:/Users/farrl/Documents/MIT/Fall 2020/Thesis/R Analysis/sbdcexponents.csv", stringsAsFactors=FALSE,na.strings=c("","NA"))
+
+SBDCexpplot <- ggplot() + geom_point(data = SBDCexp, aes(reorder(Variables, -Odds.Ratio), Odds.Ratio),colour = 'red', size = 3) +  
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5, hjust=1))
+
+SBDCexpplot <- SBDCexpplot + labs(title = "Odds Ratio for Variables on Willingness to Give Up Car",
+              x = "Variables", y = "Odds Ratio") + theme(axis.title = element_text(size = 13)) + theme(plot.title = element_text(size = 18)) 
+
+SBDCexpplot
+
+
+sum(data_gc$EmpBenAll)
+
+```
+
+```{r employer, benefits descriptive statistics, warning=FALSE}
+#how many people total had each of the employer benefits?
+
+summary(data_gc$EmpBenBike)
+sum(data_gc$EmpBenBike)
+
+summary(data_gc$EmpBenCarpool)
+sum(data_gc$EmpBenCarpool)
+
+summary(data_gc$EmpBenTransit)
+sum(data_gc$EmpBenTransit)
+
+summary(data_gc$EmpBenParking)
+sum(data_gc$EmpBenParking)
+
+sum(data_gc$EmpBenParking == 1 & data_gc$Seattle == 1)
+sum(data_gc$EmpBenParking == 1 & data_gc$Dallas == 1)
+sum(data_gc$EmpBenParking == 1 & data_gc$WashingtonDC == 1)
+sum(data_gc$EmpBenParking == 1 & data_gc$Chicago == 1)
+
+sum(data_gc$EmpBenTransit == 1 & data_gc$Seattle == 1)
+sum(data_gc$EmpBenTransit == 1 & data_gc$Dallas == 1)
+sum(data_gc$EmpBenTransit == 1 & data_gc$WashingtonDC == 1)
+sum(data_gc$EmpBenTransit == 1 & data_gc$Chicago == 1)
+
+sum(data_gc$EmpBenCarpool == 1 & data_gc$Seattle == 1)
+sum(data_gc$EmpBenCarpool == 1 & data_gc$Dallas == 1)
+sum(data_gc$EmpBenCarpool == 1 & data_gc$WashingtonDC == 1)
+sum(data_gc$EmpBenCarpool == 1 & data_gc$Chicago == 1)
+
+sum(data_gc$EmpBenBike == 1 & data_gc$Seattle == 1)
+sum(data_gc$EmpBenBike == 1 & data_gc$Dallas == 1)
+sum(data_gc$EmpBenBike == 1 & data_gc$WashingtonDC == 1)
+sum(data_gc$EmpBenBike == 1 & data_gc$Chicago == 1)
+
+sum(data_gc$EmpBenBike != 1 & data_gc$EmpBenCarpool != 1 & data_gc$EmpBenParking != 1 & data_gc$EmpBenTransit != 1 & data_gc$Seattle == 1)
+sum(data_gc$EmpBenBike != 1 & data_gc$EmpBenCarpool != 1 & data_gc$EmpBenParking != 1 & data_gc$EmpBenTransit != 1 & data_gc$Dallas == 1)
+sum(data_gc$EmpBenBike != 1 & data_gc$EmpBenCarpool != 1 & data_gc$EmpBenParking != 1 & data_gc$EmpBenTransit != 1 & data_gc$WashingtonDC == 1)
+sum(data_gc$EmpBenBike != 1 & data_gc$EmpBenCarpool != 1 & data_gc$EmpBenParking != 1 & data_gc$EmpBenTransit != 1 & data_gc$Chicago == 1)
+
+sum(data_gc$Seattle == 1)
+sum(data_gc$Dallas == 1)
+sum(data_gc$WashingtonDC == 1)
+sum(data_gc$Chicago == 1)
+
+```
+
+
+```{r log, warning=FALSE}
+#check pairwise correlations for mode travel typical, and all independent variables - less than 0.8 is okay.
+
+data_thesis1 <- subset(data_gc, select = c("ModeTravel_Typical_car", "ModeTravel_Typical_3", "ModeTravel_Typical_3", "ModeTravel_Typical_4", "ModeTravel_Typical_5", "ModeTravel_Typical_6", "ModeTravel_Typical_6", "ModeTravel_Typical_7", "ModeTravel_Typical_8", "ModeTravel_Typical_9", "ModeTravel_Typical_10", "ModeTravel_Typical_11", "ModeTravel_Typical_12"))
+
+cor.mat <- cor(data_thesis1, method = c("pearson"), use = "pairwise.complete.obs")
+cor.mat <- round(cor.mat, 2)
+cor.mat
+library(corrplot)
+corrplot(cor.mat, method="circle")
+
+data_thesis2 <- subset(data_gc, select = c("CarTripShare","PTTripShare", "RHTripShare", "BikeTripShare", "WalkTripShare"))
+
+cor.mat <- cor(data_thesis2, method = c("pearson"), use = "pairwise.complete.obs")
+cor.mat <- round(cor.mat, 2)
+cor.mat
+
+library(corrplot)
+corrplot(cor.mat, method="circle")
+
+data_thesisfinal <- subset(data_gc, select = c("ModeTravel_Typical_car","ModeTravel_Typical_PT", "ModeTravel_Typical_RH",  "ModeTravel_Typical_Bike", "ModeTravel_Typical_Walk", "EmpBenParking", "Urban", "WashingtonDC", "Chicago", "Seattle", "Male", "Age", "White", "Native", "OtherRace", "Asian", "LessCol", "ColDeg", "AdvDeg", "HHCars", "HHChild", "HHWkAdult", "EmpBenCarpool", "EmpBenTransit", "EmpBenBike", "NotWorking", "Student", "UnableCar", "UsedRH", "SeattleTransit", "DCTransit", "ChicagoTransit", "SeattleParking", "ChicagoParking", "DCParking", "SeattleBike", "ChicagoBike", "DCBike", "SeattleCarpool", "DCCarpool", "ChicagoCarpool", "Avg_NatWal"))
+
+
+cor.mat <- cor(data_thesisfinal, method = c("pearson"), use = "pairwise.complete.obs")
+cor.mat <- round(cor.mat, 2)
+cor.mat
+
+library(corrplot)
+corrplot(cor.mat, method="circle", tl.cex = 0.5)
+
+
+
+```
